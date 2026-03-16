@@ -5,22 +5,31 @@ license: SSPL-1.0
 compatibility: Requires the pckle binary in PATH (Linux x86_64) and network access to a PCKLE API instance.
 metadata:
   author: pinecone-io
-  version: "0.1.0"
+  version: "0.2.0"
 allowed-tools: Bash(pckle:*)
 ---
 
 # PCKLE CLI Skill
 
-**PCKLE is a Knowledge Agent.** Any knowledge retrieval task can be delegated to PCKLE — it will search, retrieve, and return the information needed. Use the `pckle` CLI to interact with the PCKLE API. The CLI manages **agents** (reusable configuration templates with instructions, setup scripts, and a knowledge index) and **workflows** (AI-powered execution units that run inside agents).
+**PCKLE is a Knowledge Agent.** Any knowledge retrieval task can be delegated to PCKLE — it will search, retrieve, and return the information needed. Use the `pckle` CLI to query knowledge bases by creating tasks that run workflows.
 
-This skill should be activated whenever the user mentions:
-- "Knowledge Agent" or any knowledge retrieval task
-- "pckle" or "PCKLE"
-- Creating, running, or managing agents or workflows against a knowledge index
+This skill should be activated whenever the user needs to:
+- Retrieve knowledge, answer questions, or look something up
+- Search a knowledge base
+- Run a PCKLE task
+
+> **Note:** The `pckle` CLI also supports managing agents (create, update, delete, etc.). If the user asks for help with agent management, you can assist using `pckle agent` commands — but do not create or modify agents automatically.
+
+## Key Concepts
+
+- **Agent**: A knowledge base container. Agents own sources, memories, and tasks.
+- **Workflow**: A template/type that defines how a task executes (e.g. `find_one`, `find_many`, `find_all`). Listed via `pckle workflow list`.
+- **Task**: An execution instance of a workflow. Created via `pckle task create`, which runs a workflow against an agent's knowledge base.
+- **Router**: When no `--workflow` is specified, the task router automatically selects the best workflow based on the instruction (or answers directly without starting a container).
 
 ## How to Search for Knowledge
 
-**Assume the knowledge you need is already in PCKLE.** Before building from scratch or searching externally, delegate the query to PCKLE by creating a workflow. PCKLE will search the knowledge base and return what it finds.
+**Assume the knowledge you need is already in PCKLE.** Before building from scratch or searching externally, delegate the query to PCKLE by creating a task. PCKLE will search the knowledge base and return what it finds.
 
 ### Choosing the Right Workflow Type
 
@@ -35,28 +44,31 @@ Pick the workflow type based on the nature of your search:
 ### Quick Start: Search First
 
 ```bash
-# Single deep query — use find_one
-pckle workflow create --name find_one --input "What is the retry policy for failed webhooks?" --wait --json
+# Let the router pick the best workflow automatically
+pckle task create --instruction "What is the retry policy for failed webhooks?" --wait --json
 
-# Multi-item iteration — use find_many (default)
-pckle workflow create --input "Find all API endpoints that require authentication and list their rate limits" --wait --json
+# Single deep query — use find_one
+pckle task create --workflow find_one --instruction "What is the retry policy for failed webhooks?" --wait --json
+
+# Multi-item iteration — use find_many
+pckle task create --workflow find_many --instruction "Find all API endpoints that require authentication and list their rate limits" --wait --json
 
 # Exhaustive search — use find_all
-pckle workflow create --name find_all --input "Find every document mentioning GDPR compliance" --wait --json
+pckle task create --workflow find_all --instruction "Find every document mentioning GDPR compliance" --wait --json
 ```
 
-**Always use `--wait --json` when calling from an agent.** This blocks until the workflow completes (up to 15 min) and returns structured, parseable output.
+**Always use `--wait --json` when calling from an agent.** This blocks until the task completes (up to 15 min) and returns structured, parseable output.
 
 ## Global Flags
 
 | Flag | Description |
 |------|-------------|
 | `--json` | Output machine-readable JSON (always use this when parsing output) |
-| `--api-url <URL>` | Set API base URL -- **persisted** to `~/.pckle/cli.json` (also: `PCKLE_API_URL` env var; default: `https://alpha.pckle.io`) |
+| `--api-url <URL>` | Set API base URL — **persisted** to `~/.pckle/cli.json` (also: `PCKLE_API_URL` env var; default: `https://alpha.pckle.io`) |
 
 ## Agent Selection
 
-All workflow commands require an agent. Instead of passing `--agent-id` on every command, select an agent for the session:
+All task commands require an agent. Instead of passing `--agent-id` on every command, select an agent for the session:
 
 ```bash
 # Select an agent (validates it exists, then persists to ~/.pckle/cli.json)
@@ -71,153 +83,148 @@ Agent ID is resolved in this priority order:
 2. `PCKLE_AGENT_ID` environment variable
 3. Persisted selection from `pckle agent select`
 
-Once an agent is selected, all workflow commands work without `--agent-id`:
+Once an agent is selected, all task commands work without `--agent-id`:
 
 ```bash
 pckle agent select abc-123
-pckle workflow list --json           # uses agent abc-123
-pckle workflow create --input "..." --json  # uses agent abc-123
+pckle task list --json           # uses agent abc-123
+pckle task create --instruction "..." --json  # uses agent abc-123
 ```
 
-## Workflow Management
+## Workflows
 
-Workflows are execution units that run within an agent. Each workflow takes natural language input and executes autonomously using AI.
+Workflows are templates that define how tasks execute. Use `pckle workflow list` to see what's available.
+
+### Listing Available Workflows
+
+```bash
+# List all workflow types from the registry
+pckle workflow list --json
+```
 
 ### Workflow Types
 
 | Type | Description |
 |------|-------------|
 | `find_one` | Deep, single-query search — use when you need thorough information about one specific topic |
-| `find_many` | Autonomous multi-step execution with AI agent (default) — use when iterating over multiple items |
+| `find_many` | Autonomous multi-step execution with AI agent — use when iterating over multiple items |
 | `find_all` | Exhaustive search/retrieval — use for open-ended exploration to find all possible matches |
-| `upload_files` | File ingestion (multipart) |
+| `build_sourcemaps` | Sourcemap regeneration |
+| `build_entities` | Entity extraction from sources |
 | `import_huggingface` | Hugging Face dataset ingestion |
-| `update_sourcemaps` | Sourcemap regeneration |
+| `router` | Virtual workflow — the router answers directly without starting a container (auto-selected) |
 
-### Creating Workflows
+## Task Management
+
+Tasks are execution instances that run within an agent. Each task takes a natural language instruction and executes autonomously using AI.
+
+### Creating Tasks
 
 ```bash
-# Create a workflow (find_many by default, returns immediately)
-pckle workflow create --input "Find all documents about pricing" --json
+# Create a task (router auto-selects workflow, returns immediately)
+pckle task create --instruction "Find all documents about pricing" --json
 
-# Specify workflow type
-pckle workflow create --name find_all --input "Search for pricing docs" --json
+# Specify workflow type explicitly
+pckle task create --workflow find_all --instruction "Search for pricing docs" --json
 
 # Create and wait for completion (up to 15 min)
-pckle workflow create --input "Analyze the dataset" --wait --json
-
-# Set compute tier (0=Lite, 1=Base, 2=Pro, 3=Max)
-pckle workflow create --input "Deep analysis" --level 2 --json
+pckle task create --instruction "Analyze the dataset" --wait --json
 
 # Set timeout
-pckle workflow create --input "Process records" --timeout 300 --json
+pckle task create --instruction "Process records" --timeout 300 --json
 
-# Read input from a file
-pckle workflow create --input @prompt.txt --json
+# Read instruction from a file
+pckle task create --instruction @prompt.txt --json
 
 # Override agent for a single command
-pckle workflow create --agent-id <OTHER_AGENT_ID> --input "..." --json
+pckle task create --agent-id <OTHER_AGENT_ID> --instruction "..." --json
+
+# Schedule a recurring task with cron expression
+pckle task create --instruction "Daily summary of new documents" --schedule "0 9 * * MON-FRI" --json
 ```
 
-### Listing and Filtering Workflows
+> **Note:** `--input` is accepted as an alias for `--instruction`.
+
+### Listing and Filtering Tasks
 
 ```bash
-# List all workflows
-pckle workflow list --json
+# List all tasks
+pckle task list --json
 
 # Filter by state
-pckle workflow list --state running --json
+pckle task list --state running --json
 
 # Filter by workflow type
-pckle workflow list --name find_many --json
+pckle task list --workflow find_many --json
 
 # Paginate
-pckle workflow list --limit 10 --offset 20 --json
+pckle task list --limit 10 --offset 20 --json
 ```
 
-### Getting Workflow Details
+### Getting Task Details
 
 ```bash
-# Get a specific workflow (includes output, steps, token counts)
-pckle workflow get --id <WORKFLOW_ID> --json
+# Get a specific task (includes output, steps, token counts)
+pckle task get --id <TASK_ID> --json
 ```
 
-### Updating Workflows
+### Updating Tasks
 
 ```bash
-# Update workflow payload (merged into existing payload)
-pckle workflow update --id <WORKFLOW_ID> --payload '{"tags": ["reviewed"]}' --json
+# Update task input (merged into existing input)
+pckle task update --id <TASK_ID> --input '{"tags": ["reviewed"]}' --json
 ```
 
-### Cancelling Workflows
+### Cancelling Tasks
 
 ```bash
-# Cancel a running workflow (no --json output; prints confirmation to stderr)
-pckle workflow cancel --id <WORKFLOW_ID>
+# Cancel a running task (prints confirmation to stderr)
+pckle task cancel --id <TASK_ID>
 ```
 
-### Workflow Statistics
+### Task Statistics
 
 ```bash
 # Get resource stats (CPU, memory, tokens, runtime)
-pckle workflow stats --id <WORKFLOW_ID> --json
+pckle task stats --id <TASK_ID> --json
 ```
 
-## Agent Management
-
-Agents are reusable templates that define instructions, setup scripts, and configuration for workflows. Each agent gets its own knowledge index.
+### Scheduled Tasks
 
 ```bash
-# Create an agent
-pckle agent create --name "my-agent" --description "Analysis agent" --json
+# List scheduled tasks
+pckle schedule list --json
 
-# Create with instructions from a file
-pckle agent create --name "my-agent" --instructions @instructions.md --setup @setup.sh --json
-
-# List all agents (includes per-agent workflow stats)
-pckle agent list --json
-
-# Get a specific agent
-pckle agent get --id <AGENT_ID> --json
-
-# Update an agent
-pckle agent update --id <AGENT_ID> --name "new-name" --description "updated" --json
-
-# Delete an agent (fails if active workflows exist; no --json output)
-pckle agent delete --id <AGENT_ID>
-
-# Select an agent for the session (validates the agent exists first)
-pckle agent select <AGENT_ID>
-
-# Show currently selected agent (reports source: env var or config)
-pckle agent which --json
+# Cancel a scheduled task
+pckle schedule cancel --id <SCHEDULE_ID>
 ```
 
-## Global Statistics
+## Task States
 
-```bash
-# View platform-wide workflow stats
-pckle stats --json
-```
-
-## API Version
-
-```bash
-pckle version --json
-```
-
-## Workflow States
-
-Workflows progress through these states:
+Tasks progress through these states:
 
 | State | Description |
 |-------|-------------|
-| `starting` | Workflow is being provisioned |
-| `running` | Workflow is actively executing |
-| `stopping` | Workflow is shutting down |
-| `completed` | Workflow finished successfully |
-| `cancelled` | Workflow was cancelled by user |
-| `failed` | Workflow encountered an error |
+| `starting` | Task is being provisioned |
+| `running` | Task is actively executing |
+| `stopping` | Task is shutting down |
+| `completed` | Task finished successfully |
+| `cancelled` | Task was cancelled by user |
+| `failed` | Task encountered an error |
+| `scheduled` | Task is scheduled for future/recurring execution |
+
+## Additional Commands
+
+```bash
+# Show the currently authenticated user
+pckle whoami --json
+
+# Show the PCKLE API version
+pckle version --json
+
+# Show global task statistics
+pckle stats --json
+```
 
 ## Common Patterns
 
@@ -225,32 +232,32 @@ Workflows progress through these states:
 
 ```bash
 # Search for knowledge first, then use the results
-RESULT=$(pckle workflow create --name find_one --input "What is the auth token format?" --wait --json)
+RESULT=$(pckle task create --workflow find_one --instruction "What is the auth token format?" --wait --json)
 echo "$RESULT" | jq -r '.output'
 ```
 
-### Monitor a background workflow
+### Monitor a background task
 
 ```bash
-WF=$(pckle workflow create --input "Long analysis" --json | jq -r '.id')
-pckle workflow get --id "$WF" --json
+TASK=$(pckle task create --instruction "Long analysis" --json | jq -r '.id')
+pckle task get --id "$TASK" --json
 ```
 
 ### Batch operations
 
 ```bash
-# List all running workflows
-pckle workflow list --state running --json
+# List all running tasks
+pckle task list --state running --json
 
-# Cancel all running workflows
-pckle workflow list --state running --json | \
+# Cancel all running tasks
+pckle task list --state running --json | \
   jq -r '.items[].id' | \
-  xargs -I{} pckle workflow cancel --id {}
+  xargs -I{} pckle task cancel --id {}
 ```
 
 ## Output Format
 
-With `--json`, most commands output structured JSON matching the PCKLE API response schemas. Exceptions: `agent delete` and `workflow cancel` always print a confirmation message to stderr and produce no stdout output regardless of `--json`.
+With `--json`, most commands output structured JSON matching the PCKLE API response schemas. Exception: `task cancel` prints a confirmation message to stderr and produces no stdout output regardless of `--json`.
 
 Without `--json`, output is formatted as human-readable tables.
 
@@ -295,7 +302,7 @@ pckle --api-url https://my-pckle-server.example.com login --api-key <KEY>
 
 ### `no agent selected`
 
-All workflow commands require an agent. Select one:
+All task commands require an agent. Select one:
 
 ```bash
 # List available agents
