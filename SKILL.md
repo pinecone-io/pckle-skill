@@ -43,21 +43,47 @@ Pick the workflow type based on the nature of your search:
 
 ### Quick Start: Search First
 
+**Async (preferred)** -- create the task, then poll for results:
+
 ```bash
-# Let the router pick the best workflow automatically
-pckle task create --instruction "What is the retry policy for failed webhooks?" --wait --json
+# Create a task (returns immediately with task ID and state "starting")
+TASK_ID=$(pckle task create --instruction "What is the retry policy for failed webhooks?" --json | jq -r '.id')
 
-# Single deep query — use find_one
-pckle task create --workflow find_one --instruction "What is the retry policy for failed webhooks?" --wait --json
-
-# Multi-item iteration — use find_many
-pckle task create --workflow find_many --instruction "Find all API endpoints that require authentication and list their rate limits" --wait --json
-
-# Exhaustive search — use find_all
-pckle task create --workflow find_all --instruction "Find every document mentioning GDPR compliance" --wait --json
+# Poll until the task reaches a final state (completed, failed, cancelled)
+pckle task get --id "$TASK_ID" --json
 ```
 
-**Always use `--wait --json` when calling from an agent.** This blocks until the task completes (up to 15 min) and returns structured, parseable output.
+```bash
+# Single deep query — use find_one
+TASK_ID=$(pckle task create --workflow find_one --instruction "What is the retry policy for failed webhooks?" --json | jq -r '.id')
+pckle task get --id "$TASK_ID" --json
+
+# Multi-item iteration — use find_many
+TASK_ID=$(pckle task create --workflow find_many --instruction "Find all API endpoints that require authentication and list their rate limits" --json | jq -r '.id')
+pckle task get --id "$TASK_ID" --json
+
+# Exhaustive search — use find_all
+TASK_ID=$(pckle task create --workflow find_all --instruction "Find every document mentioning GDPR compliance" --json | jq -r '.id')
+pckle task get --id "$TASK_ID" --json
+```
+
+**Sync fallback (`--wait`)** -- use only when the caller cannot poll for results:
+
+```bash
+# Blocks until the task completes (up to 15 min) and returns the final output
+pckle task create --instruction "What is the retry policy for failed webhooks?" --wait --json
+```
+
+### Choosing Between Async and `--wait`
+
+| Scenario | Use |
+|---|---|
+| Agent can run multiple commands and poll with `task get` | **Async** (create, then poll) |
+| Agent cannot poll or issue follow-up commands | `--wait` |
+| Scripting pipelines where you need the result inline | `--wait` |
+| Long-running tasks where you want to do other work while waiting | **Async** (create, then poll) |
+
+**Always use `--json` when calling from an agent** for structured, parseable output. Prefer the async pattern (create + poll) so the agent stays in control and can monitor progress, handle timeouts, or cancel tasks. Use `--wait` only when the agent has no ability to issue follow-up commands.
 
 ## Global Flags
 
@@ -121,13 +147,16 @@ Tasks are execution instances that run within an agent. Each task takes a natura
 ### Creating Tasks
 
 ```bash
-# Create a task (router auto-selects workflow, returns immediately)
+# Create a task (router auto-selects workflow, returns immediately with task ID)
 pckle task create --instruction "Find all documents about pricing" --json
 
 # Specify workflow type explicitly
 pckle task create --workflow find_all --instruction "Search for pricing docs" --json
 
-# Create and wait for completion (up to 15 min)
+# Then poll for results using the returned task ID
+pckle task get --id <TASK_ID> --json
+
+# Create and wait for completion (up to 15 min) — use only when polling is not possible
 pckle task create --instruction "Analyze the dataset" --wait --json
 
 # Set timeout
@@ -228,10 +257,31 @@ pckle stats --json
 
 ## Common Patterns
 
-### Search then act
+### Search then act (async -- preferred)
 
 ```bash
-# Search for knowledge first, then use the results
+# 1. Create the task (returns immediately)
+TASK_ID=$(pckle task create --workflow find_one --instruction "What is the auth token format?" --json | jq -r '.id')
+
+# 2. Poll until completed (check the "state" field)
+RESULT=$(pckle task get --id "$TASK_ID" --json)
+STATE=$(echo "$RESULT" | jq -r '.state')
+
+# 3. If not yet done, poll again
+if [ "$STATE" != "completed" ] && [ "$STATE" != "failed" ] && [ "$STATE" != "cancelled" ]; then
+  sleep 5
+  RESULT=$(pckle task get --id "$TASK_ID" --json)
+fi
+
+# 4. Use the result
+echo "$RESULT" | jq -r '.output'
+```
+
+### Search then act (sync fallback)
+
+Use this only when the caller cannot poll:
+
+```bash
 RESULT=$(pckle task create --workflow find_one --instruction "What is the auth token format?" --wait --json)
 echo "$RESULT" | jq -r '.output'
 ```
@@ -239,8 +289,10 @@ echo "$RESULT" | jq -r '.output'
 ### Monitor a background task
 
 ```bash
-TASK=$(pckle task create --instruction "Long analysis" --json | jq -r '.id')
-pckle task get --id "$TASK" --json
+TASK_ID=$(pckle task create --instruction "Long analysis" --json | jq -r '.id')
+
+# Check progress at any time
+pckle task get --id "$TASK_ID" --json
 ```
 
 ### Batch operations
